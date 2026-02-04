@@ -34,11 +34,12 @@ export class TextShape extends Group {
   constructor(options: TextShapeOptions) {
     const opts = { ...defaultOptions, ...options };
     
+    // Create empty group first
     super([], {
       left: opts.left,
       top: opts.top,
-      subTargetCheck: false,
-      interactive: false,
+      originX: 'center',
+      originY: 'center',
     });
 
     this._text = opts.text;
@@ -97,52 +98,6 @@ export class TextShape extends Group {
   }
 
   /**
-   * Get the font size
-   */
-  get fontSize(): number {
-    return this._fontSize;
-  }
-
-  /**
-   * Set the font size
-   */
-  set fontSize(value: number) {
-    this._fontSize = value;
-    this._renderText();
-  }
-
-  /**
-   * Get the font family
-   */
-  get fontFamily(): string {
-    return this._fontFamily;
-  }
-
-  /**
-   * Set the font family
-   */
-  set fontFamily(value: string) {
-    this._fontFamily = value;
-    this._renderText();
-  }
-
-  /**
-   * Get the fill color
-   */
-  get textFill(): string {
-    return this._textFill;
-  }
-
-  /**
-   * Set the fill color
-   */
-  set textFill(value: string) {
-    this._textFill = value;
-    this._characters.forEach(char => char.set('fill', value));
-    this.dirty = true;
-  }
-
-  /**
    * Set the shape with method chaining
    */
   setShape(shape: ShapeType): this {
@@ -185,8 +140,8 @@ export class TextShape extends Group {
    * Render the text as individual characters
    */
   private _renderText(): void {
-    // Remove existing characters
-    this.removeAll();
+    // Clear existing
+    this._objects.length = 0;
     this._characters = [];
 
     if (!this._text) {
@@ -195,16 +150,17 @@ export class TextShape extends Group {
       return;
     }
 
-    let currentX = 0;
+    // First pass: create characters and measure total width
+    let totalWidth = 0;
     const spaceWidth = this._fontSize * 0.3;
+    const charData: { char: string; charText: FabricText | null; width: number; x: number }[] = [];
 
-    // Create individual character objects
     for (let i = 0; i < this._text.length; i++) {
       const char = this._text[i];
       
-      // Handle spaces
       if (char === ' ') {
-        currentX += spaceWidth;
+        charData.push({ char, charText: null, width: spaceWidth, x: totalWidth });
+        totalWidth += spaceWidth;
         continue;
       }
 
@@ -218,24 +174,39 @@ export class TextShape extends Group {
         evented: false,
       });
 
-      // Get character width
       const charWidth = charText.width || this._fontSize * 0.6;
-      
-      // Store original position (centered on character)
-      const centerX = currentX + charWidth / 2;
-      const centerY = this._fontSize / 2;
-      
-      (charText as any)._originalX = centerX;
-      (charText as any)._originalY = centerY;
-      
-      this._characters.push(charText);
-      this.add(charText);
-
-      currentX += charWidth;
+      charData.push({ char, charText, width: charWidth, x: totalWidth });
+      totalWidth += charWidth;
     }
 
-    this._baseWidth = currentX;
+    this._baseWidth = totalWidth;
     this._baseHeight = this._fontSize;
+
+    // Second pass: position characters relative to center (0,0)
+    // Group origin is center, so we offset by -totalWidth/2
+    const offsetX = totalWidth / 2;
+    const offsetY = this._fontSize / 2;
+
+    for (const data of charData) {
+      if (!data.charText) continue;
+
+      const centerX = data.x + data.width / 2 - offsetX;
+      const centerY = 0; // Centered vertically
+
+      // Store original position for transforms
+      (data.charText as any)._originalX = data.x + data.width / 2;
+      (data.charText as any)._originalY = offsetY;
+      (data.charText as any)._relativeX = centerX;
+      (data.charText as any)._relativeY = centerY;
+
+      data.charText.set({
+        left: centerX,
+        top: centerY,
+      });
+
+      this._characters.push(data.charText);
+      this._objects.push(data.charText);
+    }
 
     // Apply transformation
     this._applyTransform();
@@ -250,7 +221,7 @@ export class TextShape extends Group {
     const shapeDef = getShape(this._shape);
     if (!shapeDef) return;
 
-    // Calculate bounds based on original positions
+    // Calculate bounds based on original (untransformed) positions
     const bounds: BoundingBox = {
       left: 0,
       top: 0,
@@ -265,12 +236,14 @@ export class TextShape extends Group {
       textHeight: bounds.height,
     };
 
-    // First pass: calculate transformed positions and find bounds
-    const transformedPositions: { x: number; y: number; angle: number }[] = [];
+    // Track actual bounds after transformation
     let minX = Infinity, maxX = -Infinity;
     let minY = Infinity, maxY = -Infinity;
 
-    this._characters.forEach((charText, idx) => {
+    // First pass: calculate all transformed positions
+    const positions: { x: number; y: number; angle: number }[] = [];
+
+    this._characters.forEach((charText) => {
       const originalX = (charText as any)._originalX || 0;
       const originalY = (charText as any)._originalY || 0;
 
@@ -279,7 +252,7 @@ export class TextShape extends Group {
         transformOptions
       );
 
-      // Calculate rotation for curved paths
+      // Calculate rotation
       let angle = 0;
       if (this._shape !== 'none' && this._intensity > 0) {
         const delta = 1;
@@ -293,37 +266,38 @@ export class TextShape extends Group {
         ) * (180 / Math.PI);
       }
 
-      transformedPositions[idx] = { x: transformed.x, y: transformed.y, angle };
+      positions.push({ x: transformed.x, y: transformed.y, angle });
 
-      // Calculate bounds including character size
-      const halfWidth = (charText.width || this._fontSize * 0.6) / 2;
-      const halfHeight = (charText.height || this._fontSize) / 2;
-      
-      minX = Math.min(minX, transformed.x - halfWidth);
-      maxX = Math.max(maxX, transformed.x + halfWidth);
-      minY = Math.min(minY, transformed.y - halfHeight);
-      maxY = Math.max(maxY, transformed.y + halfHeight);
+      // Track bounds
+      const hw = (charText.width || this._fontSize * 0.6) / 2;
+      const hh = (charText.height || this._fontSize) / 2;
+      minX = Math.min(minX, transformed.x - hw);
+      maxX = Math.max(maxX, transformed.x + hw);
+      minY = Math.min(minY, transformed.y - hh);
+      maxY = Math.max(maxY, transformed.y + hh);
     });
 
-    // Second pass: normalize positions so they start from (0,0)
+    // Calculate center offset to keep group centered
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    // Second pass: apply positions relative to calculated center
     this._characters.forEach((charText, idx) => {
-      const pos = transformedPositions[idx];
+      const pos = positions[idx];
       charText.set({
-        left: pos.x - minX,
-        top: pos.y - minY,
+        left: pos.x - centerX,
+        top: pos.y - centerY,
         angle: pos.angle,
       });
     });
 
-    // Force group to recalculate its dimensions
-    // Set explicit width/height based on actual content bounds
-    const groupWidth = maxX - minX;
-    const groupHeight = maxY - minY;
+    // Update group dimensions
+    const newWidth = maxX - minX;
+    const newHeight = maxY - minY;
 
-    // Trigger recalculation by setting dimensions
     this.set({
-      width: groupWidth,
-      height: groupHeight,
+      width: newWidth,
+      height: newHeight,
     });
 
     this.setCoords();

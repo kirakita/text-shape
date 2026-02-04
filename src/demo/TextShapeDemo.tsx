@@ -63,7 +63,7 @@ export function TextShapeDemo() {
       return;
     }
 
-    // Create new text shape
+    // Create new text shape centered on canvas
     const textShape = new TextShape({
       text,
       shape,
@@ -71,19 +71,12 @@ export function TextShapeDemo() {
       fontSize,
       fontFamily,
       fill,
+      left: canvas.width! / 2,
+      top: canvas.height! / 2,
     });
 
-    // Add to canvas first so dimensions are calculated
-    canvas.add(textShape);
-
-    // Get actual dimensions after adding
-    const groupWidth = textShape.width || 100;
-    const groupHeight = textShape.height || fontSize;
-
-    // Center the text shape on canvas
+    // Configure selection handles
     textShape.set({
-      left: (canvas.width! - groupWidth) / 2,
-      top: (canvas.height! - groupHeight) / 2,
       selectable: true,
       hasControls: true,
       hasBorders: true,
@@ -95,6 +88,7 @@ export function TextShapeDemo() {
       padding: 10,
     });
 
+    canvas.add(textShape);
     textShape.setCoords();
     canvas.setActiveObject(textShape);
     canvas.renderAll();
