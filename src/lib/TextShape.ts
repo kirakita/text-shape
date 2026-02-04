@@ -26,8 +26,8 @@ export class TextShape extends Group {
   private _fontFamily: string;
   private _textFill: string;
   private _characters: FabricText[] = [];
-  private _totalWidth: number = 0;
-  private _totalHeight: number = 0;
+  private _baseWidth: number = 0;
+  private _baseHeight: number = 0;
 
   static type = 'TextShape';
 
@@ -37,8 +37,8 @@ export class TextShape extends Group {
     super([], {
       left: opts.left,
       top: opts.top,
-      originX: 'left',
-      originY: 'top',
+      subTargetCheck: false,
+      interactive: false,
     });
 
     this._text = opts.text;
@@ -190,8 +190,8 @@ export class TextShape extends Group {
     this._characters = [];
 
     if (!this._text) {
-      this._totalWidth = 0;
-      this._totalHeight = this._fontSize;
+      this._baseWidth = 0;
+      this._baseHeight = this._fontSize;
       return;
     }
 
@@ -228,25 +228,17 @@ export class TextShape extends Group {
       (charText as any)._originalX = centerX;
       (charText as any)._originalY = centerY;
       
-      charText.set({
-        left: centerX,
-        top: centerY,
-      });
-
       this._characters.push(charText);
       this.add(charText);
 
       currentX += charWidth;
     }
 
-    this._totalWidth = currentX;
-    this._totalHeight = this._fontSize;
+    this._baseWidth = currentX;
+    this._baseHeight = this._fontSize;
 
     // Apply transformation
     this._applyTransform();
-    
-    // Update group dimensions
-    this.setCoords();
   }
 
   /**
@@ -262,8 +254,8 @@ export class TextShape extends Group {
     const bounds: BoundingBox = {
       left: 0,
       top: 0,
-      width: this._totalWidth,
-      height: this._totalHeight,
+      width: this._baseWidth,
+      height: this._baseHeight,
     };
     
     const transformOptions: TransformOptions = {
@@ -273,12 +265,12 @@ export class TextShape extends Group {
       textHeight: bounds.height,
     };
 
-    // Track actual bounds after transformation
+    // First pass: calculate transformed positions and find bounds
+    const transformedPositions: { x: number; y: number; angle: number }[] = [];
     let minX = Infinity, maxX = -Infinity;
     let minY = Infinity, maxY = -Infinity;
 
-    // Apply transformation to each character
-    this._characters.forEach(charText => {
+    this._characters.forEach((charText, idx) => {
       const originalX = (charText as any)._originalX || 0;
       const originalY = (charText as any)._originalY || 0;
 
@@ -287,50 +279,52 @@ export class TextShape extends Group {
         transformOptions
       );
 
-      charText.set({
-        left: transformed.x,
-        top: transformed.y,
-      });
-
       // Calculate rotation for curved paths
+      let angle = 0;
       if (this._shape !== 'none' && this._intensity > 0) {
         const delta = 1;
         const nextPoint = shapeDef.transform(
           { x: originalX + delta, y: originalY },
           transformOptions
         );
-        
-        const angle = Math.atan2(
+        angle = Math.atan2(
           nextPoint.y - transformed.y,
           nextPoint.x - transformed.x
         ) * (180 / Math.PI);
-        
-        charText.set({ angle });
-      } else {
-        charText.set({ angle: 0 });
       }
 
-      // Update actual bounds
-      const halfWidth = (charText.width || 0) / 2;
+      transformedPositions[idx] = { x: transformed.x, y: transformed.y, angle };
+
+      // Calculate bounds including character size
+      const halfWidth = (charText.width || this._fontSize * 0.6) / 2;
       const halfHeight = (charText.height || this._fontSize) / 2;
+      
       minX = Math.min(minX, transformed.x - halfWidth);
       maxX = Math.max(maxX, transformed.x + halfWidth);
       minY = Math.min(minY, transformed.y - halfHeight);
       maxY = Math.max(maxY, transformed.y + halfHeight);
     });
 
-    // Normalize positions so group starts at (0,0)
-    if (this._characters.length > 0) {
-      const offsetX = minX;
-      const offsetY = minY;
-
-      this._characters.forEach(charText => {
-        charText.set({
-          left: (charText.left || 0) - offsetX,
-          top: (charText.top || 0) - offsetY,
-        });
+    // Second pass: normalize positions so they start from (0,0)
+    this._characters.forEach((charText, idx) => {
+      const pos = transformedPositions[idx];
+      charText.set({
+        left: pos.x - minX,
+        top: pos.y - minY,
+        angle: pos.angle,
       });
-    }
+    });
+
+    // Force group to recalculate its dimensions
+    // Set explicit width/height based on actual content bounds
+    const groupWidth = maxX - minX;
+    const groupHeight = maxY - minY;
+
+    // Trigger recalculation by setting dimensions
+    this.set({
+      width: groupWidth,
+      height: groupHeight,
+    });
 
     this.setCoords();
     this.dirty = true;

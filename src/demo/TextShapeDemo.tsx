@@ -50,9 +50,17 @@ export function TextShapeDemo() {
   const updateTextShape = useCallback(() => {
     if (!fabricRef.current) return;
 
+    const canvas = fabricRef.current;
+
     // Remove existing text shape
     if (textShapeRef.current) {
-      fabricRef.current.remove(textShapeRef.current);
+      canvas.remove(textShapeRef.current);
+      textShapeRef.current = null;
+    }
+
+    if (!text) {
+      canvas.renderAll();
+      return;
     }
 
     // Create new text shape
@@ -65,19 +73,29 @@ export function TextShapeDemo() {
       fill,
     });
 
+    // Add to canvas first so dimensions are calculated
+    canvas.add(textShape);
+
+    // Get actual dimensions after adding
+    const groupWidth = textShape.width || 100;
+    const groupHeight = textShape.height || fontSize;
+
     // Center the text shape on canvas
-    const canvas = fabricRef.current;
-    const bounds = textShape.getBoundingRect();
-    
     textShape.set({
-      left: (canvas.width! - bounds.width) / 2,
-      top: (canvas.height! - bounds.height) / 2,
+      left: (canvas.width! - groupWidth) / 2,
+      top: (canvas.height! - groupHeight) / 2,
       selectable: true,
       hasControls: true,
       hasBorders: true,
+      borderColor: '#667eea',
+      cornerColor: '#667eea',
+      cornerStyle: 'circle',
+      transparentCorners: false,
+      cornerSize: 10,
+      padding: 10,
     });
 
-    canvas.add(textShape);
+    textShape.setCoords();
     canvas.setActiveObject(textShape);
     canvas.renderAll();
     textShapeRef.current = textShape;
