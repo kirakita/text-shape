@@ -1,4 +1,4 @@
-import { Group, FabricText, classRegistry } from 'fabric';
+import { Group, FabricText, classRegistry, type TOptions, type GroupProps } from 'fabric';
 import type { ShapeType, TextShapeOptions, TransformOptions, BoundingBox, CharacterInfo } from '../types';
 import { getShape } from './shapes/registry';
 
@@ -25,7 +25,6 @@ export class TextShape extends Group {
   private _fontSize: number;
   private _fontFamily: string;
   private _textFill: string;
-  private _characters: FabricText[] = [];
   private _baseWidth: number = 0;
   private _baseHeight: number = 0;
 
@@ -34,13 +33,19 @@ export class TextShape extends Group {
   constructor(options: TextShapeOptions) {
     const opts = { ...defaultOptions, ...options };
     
-    // Create empty group first
-    super([], {
+    // Create the character objects first
+    const { characters, baseWidth, baseHeight } = TextShape._createCharacters(
+      opts.text,
+      opts.fontSize || 48,
+      opts.fontFamily || 'Arial',
+      opts.fill || '#000000'
+    );
+
+    // Initialize Group with characters
+    super(characters, {
       left: opts.left,
       top: opts.top,
-      originX: 'center',
-      originY: 'center',
-    });
+    } as TOptions<GroupProps>);
 
     this._text = opts.text;
     this._shape = opts.shape || 'none';
@@ -48,8 +53,79 @@ export class TextShape extends Group {
     this._fontSize = opts.fontSize || 48;
     this._fontFamily = opts.fontFamily || 'Arial';
     this._textFill = opts.fill || '#000000';
+    this._baseWidth = baseWidth;
+    this._baseHeight = baseHeight;
 
-    this._renderText();
+    // Apply initial transformation
+    this._applyTransform();
+  }
+
+  /**
+   * Create character objects for the text
+   */
+  private static _createCharacters(
+    text: string,
+    fontSize: number,
+    fontFamily: string,
+    fill: string
+  ): { characters: FabricText[]; baseWidth: number; baseHeight: number } {
+    const characters: FabricText[] = [];
+    
+    if (!text) {
+      return { characters, baseWidth: 0, baseHeight: fontSize };
+    }
+
+    // First pass: measure all characters
+    let totalWidth = 0;
+    const spaceWidth = fontSize * 0.3;
+    const charData: { char: string; width: number; x: number }[] = [];
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      
+      if (char === ' ') {
+        charData.push({ char, width: spaceWidth, x: totalWidth });
+        totalWidth += spaceWidth;
+        continue;
+      }
+
+      // Create temp text to measure
+      const tempText = new FabricText(char, {
+        fontSize,
+        fontFamily,
+      });
+      const charWidth = tempText.width || fontSize * 0.6;
+      charData.push({ char, width: charWidth, x: totalWidth });
+      totalWidth += charWidth;
+    }
+
+    // Second pass: create positioned characters
+    // Position relative to center of total text
+    const offsetX = totalWidth / 2;
+
+    for (const data of charData) {
+      if (data.char === ' ') continue;
+
+      const charText = new FabricText(data.char, {
+        fontSize,
+        fontFamily,
+        fill,
+        originX: 'center',
+        originY: 'center',
+        left: data.x + data.width / 2 - offsetX,
+        top: 0,
+        selectable: false,
+        evented: false,
+      });
+
+      // Store original position for transforms
+      (charText as any)._originalX = data.x + data.width / 2;
+      (charText as any)._originalY = fontSize / 2;
+
+      characters.push(charText);
+    }
+
+    return { characters, baseWidth: totalWidth, baseHeight: fontSize };
   }
 
   /**
@@ -64,7 +140,7 @@ export class TextShape extends Group {
    */
   set text(value: string) {
     this._text = value;
-    this._renderText();
+    this._rebuildText();
   }
 
   /**
@@ -122,90 +198,43 @@ export class TextShape extends Group {
   }
 
   /**
-   * Get character info for debugging/visualization
+   * Get character info for debugging
    */
   getCharacterInfo(): CharacterInfo[] {
-    return this._characters.map((char, i) => ({
-      char: this._text[i],
-      originalX: (char as any)._originalX || 0,
-      originalY: (char as any)._originalY || 0,
-      transformedX: char.left || 0,
-      transformedY: char.top || 0,
-      rotation: char.angle || 0,
-      scale: char.scaleX || 1,
-    }));
+    return this.getObjects().map((obj, i) => {
+      const charText = obj as FabricText;
+      return {
+        char: this._text[i] || '',
+        originalX: (charText as any)._originalX || 0,
+        originalY: (charText as any)._originalY || 0,
+        transformedX: charText.left || 0,
+        transformedY: charText.top || 0,
+        rotation: charText.angle || 0,
+        scale: charText.scaleX || 1,
+      };
+    });
   }
 
   /**
-   * Render the text as individual characters
+   * Rebuild text when content changes
    */
-  private _renderText(): void {
-    // Clear existing
-    this._objects.length = 0;
-    this._characters = [];
+  private _rebuildText(): void {
+    // Remove all existing objects
+    this.removeAll();
 
-    if (!this._text) {
-      this._baseWidth = 0;
-      this._baseHeight = this._fontSize;
-      return;
-    }
+    const { characters, baseWidth, baseHeight } = TextShape._createCharacters(
+      this._text,
+      this._fontSize,
+      this._fontFamily,
+      this._textFill
+    );
 
-    // First pass: create characters and measure total width
-    let totalWidth = 0;
-    const spaceWidth = this._fontSize * 0.3;
-    const charData: { char: string; charText: FabricText | null; width: number; x: number }[] = [];
+    this._baseWidth = baseWidth;
+    this._baseHeight = baseHeight;
 
-    for (let i = 0; i < this._text.length; i++) {
-      const char = this._text[i];
-      
-      if (char === ' ') {
-        charData.push({ char, charText: null, width: spaceWidth, x: totalWidth });
-        totalWidth += spaceWidth;
-        continue;
-      }
-
-      const charText = new FabricText(char, {
-        fontSize: this._fontSize,
-        fontFamily: this._fontFamily,
-        fill: this._textFill,
-        originX: 'center',
-        originY: 'center',
-        selectable: false,
-        evented: false,
-      });
-
-      const charWidth = charText.width || this._fontSize * 0.6;
-      charData.push({ char, charText, width: charWidth, x: totalWidth });
-      totalWidth += charWidth;
-    }
-
-    this._baseWidth = totalWidth;
-    this._baseHeight = this._fontSize;
-
-    // Second pass: position characters relative to center (0,0)
-    // Group origin is center, so we offset by -totalWidth/2
-    const offsetX = totalWidth / 2;
-    const offsetY = this._fontSize / 2;
-
-    for (const data of charData) {
-      if (!data.charText) continue;
-
-      const centerX = data.x + data.width / 2 - offsetX;
-      const centerY = 0; // Centered vertically
-
-      // Store original position for transforms
-      (data.charText as any)._originalX = data.x + data.width / 2;
-      (data.charText as any)._originalY = offsetY;
-      (data.charText as any)._relativeX = centerX;
-      (data.charText as any)._relativeY = centerY;
-
-      data.charText.set({
-        left: centerX,
-        top: centerY,
-      });
-
-      this._characters.push(data.charText);
-      this._objects.push(data.charText);
+    // Add new characters
+    for (const char of characters) {
+      this.add(char);
     }
 
     // Apply transformation
@@ -213,15 +242,16 @@ export class TextShape extends Group {
   }
 
   /**
-   * Apply the current shape transformation to all characters
+   * Apply the current shape transformation
    */
   private _applyTransform(): void {
-    if (this._characters.length === 0) return;
+    const objects = this.getObjects() as FabricText[];
+    if (objects.length === 0) return;
 
     const shapeDef = getShape(this._shape);
     if (!shapeDef) return;
 
-    // Calculate bounds based on original (untransformed) positions
+    // Bounds for transformation calculation
     const bounds: BoundingBox = {
       left: 0,
       top: 0,
@@ -240,10 +270,10 @@ export class TextShape extends Group {
     let minX = Infinity, maxX = -Infinity;
     let minY = Infinity, maxY = -Infinity;
 
-    // First pass: calculate all transformed positions
+    // Calculate all transformed positions
     const positions: { x: number; y: number; angle: number }[] = [];
 
-    this._characters.forEach((charText) => {
+    objects.forEach((charText) => {
       const originalX = (charText as any)._originalX || 0;
       const originalY = (charText as any)._originalY || 0;
 
@@ -252,7 +282,7 @@ export class TextShape extends Group {
         transformOptions
       );
 
-      // Calculate rotation
+      // Calculate rotation for curved paths
       let angle = 0;
       if (this._shape !== 'none' && this._intensity > 0) {
         const delta = 1;
@@ -277,27 +307,19 @@ export class TextShape extends Group {
       maxY = Math.max(maxY, transformed.y + hh);
     });
 
-    // Calculate center offset to keep group centered
+    // Calculate center offset
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
 
-    // Second pass: apply positions relative to calculated center
-    this._characters.forEach((charText, idx) => {
+    // Apply positions relative to center
+    objects.forEach((charText, idx) => {
       const pos = positions[idx];
       charText.set({
         left: pos.x - centerX,
         top: pos.y - centerY,
         angle: pos.angle,
       });
-    });
-
-    // Update group dimensions
-    const newWidth = maxX - minX;
-    const newHeight = maxY - minY;
-
-    this.set({
-      width: newWidth,
-      height: newHeight,
+      charText.setCoords();
     });
 
     this.setCoords();
@@ -305,7 +327,7 @@ export class TextShape extends Group {
   }
 
   /**
-   * Get custom serializable properties
+   * Get serializable data
    */
   getTextShapeData() {
     return {
